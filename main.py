@@ -1,121 +1,182 @@
 
+from flask import Flask, request, jsonify
 import yt_dlp
 import os
-import sys
+import tempfile
+import re
 
-def download_subtitles(video_url, language='ru', output_dir='subtitles'):
+app = Flask(__name__)
+
+def clean_subtitles(subtitle_file):
     """
-    Скачивает субтитры с YouTube видео
-    
-    Args:
-        video_url (str): URL YouTube видео
-        language (str): Код языка субтитров (по умолчанию 'ru')
-        output_dir (str): Папка для сохранения субтитров
+    Очищает субтитры от временных отрезков и оставляет только текст
     """
-    # Создаем папку для субтитров если её нет
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    
-    # Настройки для yt-dlp
-    ydl_opts = {
-        'writesubtitles': True,        # Скачивать субтитры
-        'writeautomaticsub': True,     # Скачивать автоматические субтитры если обычных нет
-        'subtitleslangs': [language],  # Язык субтитров
-        'skip_download': True,         # Не скачивать видео, только субтитры
-        'outtmpl': f'{output_dir}/%(title)s.%(ext)s',  # Шаблон имени файла
-        'subtitlesformat': 'srt',      # Формат субтитров
-    }
-    
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Получаем информацию о видео
-            info = ydl.extract_info(video_url, download=False)
-            video_title = info.get('title', 'Unknown')
-            
-            print(f"Видео: {video_title}")
-            print(f"Скачиваем субтитры на языке: {language}")
-            
-            # Скачиваем субтитры
-            ydl.download([video_url])
-            
-            print(f"✅ Субтитры успешно скачаны в папку '{output_dir}'")
-            
+        with open(subtitle_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Удаляем номера строк
+        content = re.sub(r'^\d+\n', '', content, flags=re.MULTILINE)
+        
+        # Удаляем временные метки (формат: 00:00:00,000 --> 00:00:00,000)
+        content = re.sub(r'\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}\n', '', content)
+        
+        # Удаляем лишние пустые строки
+        content = re.sub(r'\n\n+', '\n', content)
+        
+        # Убираем HTML теги если есть
+        content = re.sub(r'<[^>]+>', '', content)
+        
+        # Убираем лишние пробелы
+        lines = [line.strip() for line in content.split('\n') if line.strip()]
+        
+        return '\n'.join(lines)
+    
     except Exception as e:
-        print(f"❌ Ошибка при скачивании субтитров: {str(e)}")
+        return f"Ошибка при очистке субтитров: {str(e)}"
 
-def list_available_subtitles(video_url):
+def download_and_clean_subtitles(video_url, language='ru'):
     """
-    Показывает доступные языки субтитров для видео
+    Скачивает и очищает субтитры
     """
-    ydl_opts = {
-        'listsubtitles': True,
-        'skip_download': True,
-    }
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            
-            print(f"\nВидео: {info.get('title', 'Unknown')}")
-            print("\nДоступные субтитры:")
-            
-            subtitles = info.get('subtitles', {})
-            automatic_captions = info.get('automatic_captions', {})
-            
-            if subtitles:
-                print("Обычные субтитры:")
-                for lang in subtitles.keys():
-                    print(f"  - {lang}")
-            
-            if automatic_captions:
-                print("Автоматические субтитры:")
-                for lang in automatic_captions.keys():
-                    print(f"  - {lang}")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Настройки для yt-dlp
+        ydl_opts = {
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitleslangs': [language],
+            'skip_download': True,
+            'outtmpl': f'{temp_dir}/%(title)s.%(ext)s',
+            'subtitlesformat': 'srt',
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Получаем информацию о видео
+                info = ydl.extract_info(video_url, download=False)
+                video_title = info.get('title', 'Unknown')
+                
+                # Скачиваем субтитры
+                ydl.download([video_url])
+                
+                # Ищем скачанный файл субтитров
+                subtitle_file = None
+                for file in os.listdir(temp_dir):
+                    if file.endswith(f'.{language}.srt'):
+                        subtitle_file = os.path.join(temp_dir, file)
+                        break
+                
+                if subtitle_file and os.path.exists(subtitle_file):
+                    cleaned_text = clean_subtitles(subtitle_file)
+                    return {
+                        'success': True,
+                        'video_title': video_title,
+                        'subtitles': cleaned_text,
+                        'language': language
+                    }
+                else:
+                    return {
+                        'success': False,
+                        'error': f'Субтитры на языке {language} не найдены'
+                    }
                     
-            if not subtitles and not automatic_captions:
-                print("  Субтитры не найдены")
-                
-    except Exception as e:
-        print(f"❌ Ошибка при получении информации: {str(e)}")
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
-def main():
-    print("🎬 YouTube Subtitle Downloader")
-    print("=" * 40)
+@app.route('/', methods=['GET'])
+def home():
+    """
+    Главная страница с инструкциями
+    """
+    return """
+    <h1>🎬 YouTube Subtitle API</h1>
+    <h2>Как использовать:</h2>
+    <p><strong>POST запрос на /subtitles</strong></p>
+    <p>Параметры JSON:</p>
+    <ul>
+        <li><code>url</code> - URL YouTube видео (обязательно)</li>
+        <li><code>language</code> - код языка субтитров (по умолчанию: ru)</li>
+    </ul>
     
-    while True:
-        print("\nВыберите действие:")
-        print("1. Скачать субтитры")
-        print("2. Показать доступные языки субтитров")
-        print("3. Выход")
-        
-        choice = input("\nВведите номер (1-3): ").strip()
-        
-        if choice == '1':
-            video_url = input("Введите URL YouTube видео: ").strip()
-            if not video_url:
-                print("❌ URL не может быть пустым")
-                continue
-                
-            language = input("Введите код языка (например, ru, en, es) [по умолчанию: ru]: ").strip()
-            if not language:
-                language = 'ru'
-                
-            download_subtitles(video_url, language)
-            
-        elif choice == '2':
-            video_url = input("Введите URL YouTube видео: ").strip()
-            if not video_url:
-                print("❌ URL не может быть пустым")
-                continue
-                
-            list_available_subtitles(video_url)
-            
-        elif choice == '3':
-            print("👋 До свидания!")
-            break
-            
-        else:
-            print("❌ Неверный выбор. Попробуйте снова.")
+    <h3>Пример запроса:</h3>
+    <pre>
+POST /subtitles
+Content-Type: application/json
 
-if __name__ == "__main__":
-    main()
+{
+    "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+    "language": "ru"
+}
+    </pre>
+    
+    <h3>Пример ответа:</h3>
+    <pre>
+{
+    "success": true,
+    "video_title": "Название видео",
+    "subtitles": "Очищенный текст субтитров...",
+    "language": "ru"
+}
+    </pre>
+    
+    <h3>Коды языков:</h3>
+    <ul>
+        <li>ru - русский</li>
+        <li>en - английский</li>
+        <li>es - испанский</li>
+        <li>fr - французский</li>
+        <li>de - немецкий</li>
+    </ul>
+    """
+
+@app.route('/subtitles', methods=['POST'])
+def get_subtitles():
+    """
+    API endpoint для получения субтитров
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'url' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'URL параметр обязателен'
+            }), 400
+        
+        video_url = data['url']
+        language = data.get('language', 'ru')
+        
+        # Простая валидация URL
+        if 'youtube.com' not in video_url and 'youtu.be' not in video_url:
+            return jsonify({
+                'success': False,
+                'error': 'Неверный YouTube URL'
+            }), 400
+        
+        result = download_and_clean_subtitles(video_url, language)
+        
+        if result['success']:
+            return jsonify(result), 200
+        else:
+            return jsonify(result), 404
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Внутренняя ошибка сервера: {str(e)}'
+        }), 500
+
+@app.route('/health', methods=['GET'])
+def health():
+    """
+    Проверка состояния сервиса
+    """
+    return jsonify({'status': 'ok'}), 200
+
+if __name__ == '__main__':
+    print("🚀 Запуск YouTube Subtitle API сервера...")
+    print("📝 Документация доступна на: http://0.0.0.0:5000/")
+    app.run(host='0.0.0.0', port=5000, debug=True)
