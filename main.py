@@ -1,59 +1,73 @@
 from flask import Flask, request, jsonify
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
-import re
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
+import requests
+import random
 
 app = Flask(__name__)
 
-def clean_transcript(transcript):
-    lines = [entry['text'].strip() for entry in transcript if entry['text'].strip()]
-    cleaned = '\n'.join(lines)
-    cleaned = re.sub(r'\n+', '\n', cleaned)
-    return cleaned
+# Список прокси-серверов (IP:PORT)
+PROXIES = [
+    "http://181.41.194.186:80",
+    "http://168.197.42.74:8082",
+    "http://91.103.120.39:80",
+    "http://23.247.136.248:80",
+    "http://81.22.132.94:15182",
+    "http://193.108.119.63:80",
+]
 
-def extract_video_id(url):
-    import re
-    match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11})', url)
-    return match.group(1) if match else None
+def get_transcript_with_random_proxy(video_id):
+    # Выбираем случайный прокси из списка
+    proxy_url = random.choice(PROXIES)
+    proxies = {
+        "http": proxy_url,
+        "https": proxy_url,
+    }
+
+    session = requests.Session()
+    session.proxies.update(proxies)
+    YouTubeTranscriptApi._session = session
+
+    # Получаем субтитры
+    transcript = YouTubeTranscriptApi.get_transcript(video_id)
+    return transcript
 
 @app.route('/')
 def home():
-    return "<h2>Hello, Use /subtitles?url=...&language=ru</h2>"
+    return """
+    <h1>🎬 YouTube Transcript API with Proxy</h1>
+    <p>Use <code>/transcript?url=...</code> to get subtitles.</p>
+    """
 
-@app.route('/subtitles', methods=['GET'])
-def get_subtitles():
-    url = request.args.get('url')
-    preferred = request.args.get('language', 'ru')
-    fallback = 'en'
-
-    if not url:
-        return jsonify({'success': False, 'error': 'Missing URL'}), 400
-
-    video_id = extract_video_id(url)
-    if not video_id:
-        return jsonify({'success': False, 'error': 'Invalid YouTube URL'}), 400
-
+@app.route('/transcript', methods=['GET'])
+def transcript():
     try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=[preferred])
-        return jsonify({
-            'success': True,
-            'language': preferred,
-            'subtitles': clean_transcript(transcript)
-        })
-    except NoTranscriptFound:
-        try:
-            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=[fallback])
-            return jsonify({
-                'success': True,
-                'language': fallback,
-                'subtitles': clean_transcript(transcript),
-                'note': 'Fallback to English was used'
-            })
-        except NoTranscriptFound:
-            return jsonify({'success': False, 'error': 'No subtitles found in any language'}), 404
+        video_url = request.args.get('url')
+        if not video_url:
+            return jsonify({'success': False, 'error': 'Missing url param'}), 400
+
+        # Извлечение video_id
+        if 'v=' in video_url:
+            video_id = video_url.split("v=")[-1].split("&")[0]
+        elif 'youtu.be/' in video_url:
+            video_id = video_url.split("youtu.be/")[-1].split("?")[0]
+        else:
+            return jsonify({'success': False, 'error': 'Invalid YouTube URL'}), 400
+
+        transcript = get_transcript_with_random_proxy(video_id)
+        transcript_text = '\n'.join([line['text'] for line in transcript])
+
+        return jsonify({'success': True, 'video_id': video_id, 'transcript': transcript_text}), 200
+
     except TranscriptsDisabled:
-        return jsonify({'success': False, 'error': 'Subtitles are disabled for this video'}), 403
+        return jsonify({'success': False, 'error': 'Transcripts are disabled for this video'}), 404
+
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({'status': 'ok'}), 200
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    print("🚀 Starting YouTube Transcript API with Proxy...")
+    app.run(host='0.0.0.0', port=5000, debug=True)
