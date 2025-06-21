@@ -3,3 +3,4 @@ requests
 jsonify
 youtube-transcript-api
 gunicorn
+beautifulsoup4
