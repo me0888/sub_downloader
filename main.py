@@ -1,73 +1,99 @@
-from flask import Flask, request, jsonify
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
+import os
 import requests
-import random
+from bs4 import BeautifulSoup
+from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound, CouldNotRetrieveTranscript
+import time
 
-app = Flask(__name__)
+def fetch_proxies():
+    url = "https://free-proxy-list.net/"
+    res = requests.get(url)
+    soup = BeautifulSoup(res.text, "html.parser")
+    proxies = []
+    for row in soup.select("table#proxylisttable tbody tr"):
+        tds = row.find_all("td")
+        if tds[6].text.strip() == "yes":  # HTTPS support
+            proxies.append(f"http://{tds[0].text.strip()}:{tds[1].text.strip()}")
+    return proxies
 
-# Список прокси-серверов (IP:PORT)
-PROXIES = [
-    "http://181.41.194.186:80",
-    "http://168.197.42.74:8082",
-    "http://91.103.120.39:80",
-    "http://23.247.136.248:80",
-    "http://81.22.132.94:15182",
-    "http://193.108.119.63:80",
-]
-
-def get_transcript_with_random_proxy(video_id):
-    # Выбираем случайный прокси из списка
-    proxy_url = random.choice(PROXIES)
-    proxies = {
-        "http": proxy_url,
-        "https": proxy_url,
-    }
-
-    session = requests.Session()
-    session.proxies.update(proxies)
-    YouTubeTranscriptApi._session = session
-
-    # Получаем субтитры
-    transcript = YouTubeTranscriptApi.get_transcript(video_id)
-    return transcript
-
-@app.route('/')
-def home():
-    return """
-    <h1>🎬 YouTube Transcript API with Proxy</h1>
-    <p>Use <code>/transcript?url=...</code> to get subtitles.</p>
-    """
-
-@app.route('/transcript', methods=['GET'])
-def transcript():
+def is_proxy_working(proxy):
     try:
-        video_url = request.args.get('url')
-        if not video_url:
-            return jsonify({'success': False, 'error': 'Missing url param'}), 400
+        r = requests.get("https://httpbin.org/ip", proxies={"http": proxy, "https": proxy}, timeout=5)
+        return r.status_code == 200
+    except:
+        return False
 
-        # Извлечение video_id
-        if 'v=' in video_url:
-            video_id = video_url.split("v=")[-1].split("&")[0]
-        elif 'youtu.be/' in video_url:
-            video_id = video_url.split("youtu.be/")[-1].split("?")[0]
-        else:
-            return jsonify({'success': False, 'error': 'Invalid YouTube URL'}), 400
+def get_working_proxies():
+    proxies = fetch_proxies()
+    working = []
+    for proxy in proxies:
+        if is_proxy_working(proxy):
+            print(f"[✓] Working proxy found: {proxy}")
+            working.append(proxy)
+            if len(working) >= 5:  # Ограничим список до 5 для ротации
+                break
+    if not working:
+        print("[!] No working proxies found")
+    return working
 
-        transcript = get_transcript_with_random_proxy(video_id)
-        transcript_text = '\n'.join([line['text'] for line in transcript])
-
-        return jsonify({'success': True, 'video_id': video_id, 'transcript': transcript_text}), 200
-
-    except TranscriptsDisabled:
-        return jsonify({'success': False, 'error': 'Transcripts are disabled for this video'}), 404
-
+def fetch_subtitles_with_proxy(video_id, proxy):
+    try:
+        proxies = {
+            "http": proxy,
+            "https": proxy,
+        }
+        session = requests.Session()
+        session.proxies.update(proxies)
+        # YouTubeTranscriptApi не поддерживает напрямую сессии, поэтому придется вручную переопределять request:
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        return transcript
+    except (TranscriptsDisabled, NoTranscriptFound) as e:
+        raise e
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        print(f"[!] Proxy {proxy} failed: {e}")
+        return None
 
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({'status': 'ok'}), 200
+def fetch_subtitles_with_scraperapi(video_id, api_key):
+    # Используем ScraperAPI для проксирования
+    url = f"http://api.scraperapi.com/?api_key={api_key}&url=https://www.youtube.com/watch?v={video_id}"
+    try:
+        r = requests.get(url)
+        if r.status_code != 200:
+            print(f"[!] ScraperAPI request failed with code {r.status_code}")
+            return None
+        # Теперь можно пробовать получить субтитры через обычный метод, но используя cookies или session ScraperAPI — упрощенно:
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        return transcript
+    except Exception as e:
+        print(f"[!] ScraperAPI fetch failed: {e}")
+        return None
 
-if __name__ == '__main__':
-    print("🚀 Starting YouTube Transcript API with Proxy...")
-    app.run(host='0.0.0.0', port=5000, debug=True)
+def get_subtitles(video_id):
+    working_proxies = get_working_proxies()
+    for proxy in working_proxies:
+        subs = fetch_subtitles_with_proxy(video_id, proxy)
+        if subs:
+            print(f"[✓] Subtitles fetched using proxy {proxy}")
+            return subs
+        time.sleep(1)  # Не спамить слишком быстро
+    
+    # Если прокси не сработали, используем ScraperAPI
+    scraper_api_key = os.getenv("SCRAPER_API_KEY")
+    if scraper_api_key:
+        subs = fetch_subtitles_with_scraperapi(video_id, scraper_api_key)
+        if subs:
+            print("[✓] Subtitles fetched using ScraperAPI")
+            return subs
+    else:
+        print("[!] SCRAPER_API_KEY env var not set")
+    
+    raise Exception("Failed to fetch subtitles with proxies and ScraperAPI")
+
+if __name__ == "__main__":
+    video_id = "5GJI5VoGizQ"
+    try:
+        subtitles = get_subtitles(video_id)
+        for entry in subtitles:
+            print(f"{entry['start']:.2f}s: {entry['text']}")
+    except Exception as e:
+        print(f"[!] Error: {e}")
