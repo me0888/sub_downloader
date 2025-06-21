@@ -17,7 +17,7 @@ def extract_video_id(url):
 
 @app.route('/')
 def home():
-    return "<h2>Use /subtitles?url=...&language=ru</h2>"
+    return "<h2>Hello, Use /subtitles?url=...&language=ru</h2>"
 
 @app.route('/subtitles', methods=['GET'])
 def get_subtitles():
