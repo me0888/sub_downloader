@@ -37,7 +37,7 @@ def scan_ports():
 def index():
     return '''
     <h1>🔎 Прокси сканер</h1>
-    <p><a href="/scan">Начать сканирование портов</a></p>
+    <p><a href="/scan">Hi, Начать сканирование портов</a></p>
     <pre id="output"></pre>
     <script>
         const output = document.getElementById("output");
