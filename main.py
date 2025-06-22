@@ -1,22 +1,68 @@
-from flask import Flask, Response, stream_with_context
+from flask import Flask, Response, stream_with_context, request, render_template_string
 import requests
 import socks
 import socket
 import time
 
-# ==== Настройки ====
-PROXY_IP = '51.83.98.78'
-USERNAME = 'edward24-vpnjantit.com'
-PASSWORD = 'bazar9798'
-START_PORT = 15000
-END_PORT = 15002  # Уменьшено для примера, можешь увеличить
-TIMEOUT = 3
-# ====================
-
 app = Flask(__name__)
 
-def test_proxy(port):
-    socks.set_default_proxy(socks.SOCKS5, PROXY_IP, port, username=USERNAME, password=PASSWORD)
+TIMEOUT = 3
+
+# HTML шаблон с формой и выводом результата
+HTML = '''
+<!doctype html>
+<html>
+<head>
+    <title>Прокси сканер</title>
+</head>
+<body>
+    <h1>🔎 Прокси сканер</h1>
+    <form id="proxyForm">
+        <label>IP сервера (прокси): <input type="text" name="ip" required></label><br>
+        <label>Порт от: <input type="number" name="start_port" min="1" max="65535" value="1" required></label><br>
+        <label>Порт до: <input type="number" name="end_port" min="1" max="65535" value="1000" required></label><br>
+        <label>Пользователь: <input type="text" name="username"></label><br>
+        <label>Пароль: <input type="password" name="password"></label><br>
+        <button type="submit">Начать сканирование</button>
+    </form>
+
+    <h2>Результаты:</h2>
+    <pre id="output"></pre>
+
+    <script>
+        const form = document.getElementById('proxyForm');
+        const output = document.getElementById('output');
+        let eventSource;
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            if (eventSource) {
+                eventSource.close();
+            }
+            output.textContent = '';
+
+            const formData = new FormData(form);
+            const params = new URLSearchParams(formData).toString();
+
+            eventSource = new EventSource('/scan?' + params);
+
+            eventSource.onmessage = function(e) {
+                output.textContent += e.data + "\\n";
+            };
+            eventSource.onerror = function() {
+                output.textContent += "\\n[Соединение закрыто]\\n";
+                eventSource.close();
+            };
+        });
+    </script>
+</body>
+</html>
+'''
+
+def test_proxy(ip, port, username, password):
+    # Настройка прокси
+    socks.set_default_proxy(socks.SOCKS5, ip, port, username=username or None, password=password or None)
     socket.socket = socks.socksocket
     try:
         r = requests.get('http://httpbin.org/ip', timeout=TIMEOUT)
@@ -24,34 +70,39 @@ def test_proxy(port):
     except:
         return False
 
-def scan_ports():
-    for port in range(START_PORT, END_PORT + 1):
-        status = test_proxy(port)
-        yield f"data: {PROXY_IP}\n\n"
+def scan_ports(ip, username, password, start_port, end_port):
+    for port in range(start_port, end_port + 1):
+        status = test_proxy(ip, port, username, password)
         if status:
             yield f"data: ✅ Порт {port} работает\n\n"
         else:
             yield f"data: ❌ Порт {port} не работает\n\n"
-        time.sleep(0.1)  # чтоб не зафлудить
+        time.sleep(0.1)  # чтобы не флудить
 
 @app.route('/')
 def index():
-    return '''
-    <h1>🔎 Прокси сканер</h1>
-    <p><a href="/scan">Hi, Начать сканирование портов</a></p>
-    <pre id="output"></pre>
-    <script>
-        const output = document.getElementById("output");
-        const eventSource = new EventSource("/scan");
-        eventSource.onmessage = function(e) {
-            output.textContent += e.data + "\\n";
-        }
-    </script>
-    '''
+    return render_template_string(HTML)
 
 @app.route('/scan')
 def stream():
-    return Response(stream_with_context(scan_ports()), mimetype='text/event-stream')
+    ip = request.args.get('ip')
+    username = request.args.get('username', '')
+    password = request.args.get('password', '')
+    try:
+        start_port = int(request.args.get('start_port', 1))
+        end_port = int(request.args.get('end_port', 1000))
+    except ValueError:
+        return "Порт должен быть числом", 400
+
+    if not ip:
+        return "IP сервера обязателен", 400
+    if not (1 <= start_port <= 65535) or not (1 <= end_port <= 65535):
+        return "Порты должны быть в диапазоне 1-65535", 400
+    if start_port > end_port:
+        return "Порт от не может быть больше порта до", 400
+
+    return Response(stream_with_context(scan_ports(ip, username, password, start_port, end_port)),
+                    mimetype='text/event-stream')
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
