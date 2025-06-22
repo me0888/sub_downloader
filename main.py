@@ -1,14 +1,11 @@
 from flask import Flask, Response, stream_with_context, request, render_template_string
 import requests
-import socks
-import socket
 import time
 
 app = Flask(__name__)
 
 TIMEOUT = 3
 
-# HTML шаблон с формой и выводом результата
 HTML = '''
 <!doctype html>
 <html>
@@ -16,7 +13,7 @@ HTML = '''
     <title>Прокси сканер</title>
 </head>
 <body>
-    <h1>🔎 Прокси сканер</h1>
+    <h1>🔎 9 Прокси сканер</h1>
     <form id="proxyForm">
         <label>IP сервера (прокси): <input type="text" name="ip" required></label><br>
         <label>Порт от: <input type="number" name="start_port" min="1" max="65535" value="1" required></label><br>
@@ -61,13 +58,21 @@ HTML = '''
 '''
 
 def test_proxy(ip, port, username, password):
-    # Настройка прокси
-    socks.set_default_proxy(socks.SOCKS5, ip, port, username=username or None, password=password or None)
-    socket.socket = socks.socksocket
+    if username and password:
+        proxy_auth = f"{username}:{password}@"
+    else:
+        proxy_auth = ""
+    proxy_url = f"http://{proxy_auth}{ip}:{port}"
+
+    proxies = {
+        "http": proxy_url,
+        "https": proxy_url,
+    }
+
     try:
-        r = requests.get('http://httpbin.org/ip', timeout=TIMEOUT)
+        r = requests.get('http://httpbin.org/ip', proxies=proxies, timeout=TIMEOUT)
         return r.status_code == 200
-    except:
+    except Exception:
         return False
 
 def scan_ports(ip, username, password, start_port, end_port):
@@ -77,7 +82,7 @@ def scan_ports(ip, username, password, start_port, end_port):
             yield f"data: ✅ Порт {port} работает\n\n"
         else:
             yield f"data: ❌ Порт {port} не работает\n\n"
-        time.sleep(0.1)  # чтобы не флудить
+        time.sleep(0.1)
 
 @app.route('/')
 def index():
