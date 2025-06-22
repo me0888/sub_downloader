@@ -4,3 +4,4 @@ jsonify
 youtube-transcript-api
 gunicorn
 beautifulsoup4
+pysocks
