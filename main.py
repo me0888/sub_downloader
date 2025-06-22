@@ -5,11 +5,11 @@ import socket
 import time
 
 # ==== Настройки ====
-PROXY_IP = '12.87.98.78'
-USERNAME = 'ed123'
-PASSWORD = 'jo998'
-START_PORT = 1
-END_PORT = 1000  # Уменьшено для примера, можешь увеличить
+PROXY_IP = '51.83.98.78'
+USERNAME = 'edward24-vpnjantit.com'
+PASSWORD = 'bazar9798'
+START_PORT = 15000
+END_PORT = 15020  # Уменьшено для примера, можешь увеличить
 TIMEOUT = 3
 # ====================
 
