@@ -9,7 +9,7 @@ PROXY_IP = '51.83.98.78'
 USERNAME = 'edward24-vpnjantit.com'
 PASSWORD = 'bazar9798'
 START_PORT = 15000
-END_PORT = 15020  # Уменьшено для примера, можешь увеличить
+END_PORT = 15002  # Уменьшено для примера, можешь увеличить
 TIMEOUT = 3
 # ====================
 
@@ -27,6 +27,7 @@ def test_proxy(port):
 def scan_ports():
     for port in range(START_PORT, END_PORT + 1):
         status = test_proxy(port)
+        yield f"data: {PROXY_IP}\n\n"
         if status:
             yield f"data: ✅ Порт {port} работает\n\n"
         else:
